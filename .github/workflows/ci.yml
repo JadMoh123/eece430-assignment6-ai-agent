@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  # GHCR image names must be all lowercase.
+  IMAGE: ghcr.io/jadmoh123/eece430-assignment6-ai-agent:latest
+  CONTAINER: ai-agent-app
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # chat/agent.py reads this key when Django loads the app.
+      # A placeholder is enough for the checks and tests, which never call Gemini.
+      GEMINI_API_KEY: ci-placeholder-key
+    steps:
+      - uses: actions/checkout@v5
+
+      # Django 6.1 needs Python 3.12+, so this uses 3.13 (same as the Dockerfile).
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Django system check
+        run: python manage.py check
+
+      - name: Run tests
+        run: python manage.py test
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Docker image
+        run: docker build -t ${{ env.IMAGE }} .
+
+      - name: Push Docker image
+        run: docker push ${{ env.IMAGE }}
+
+  deploy:
+    needs: test
+    runs-on: [self-hosted, ai-agent-deploy]
+    steps:
+      - name: Check Docker on Windows
+        if: runner.os == 'Windows'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
+        run: docker info
+
+      - name: Check Docker on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: docker info
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image on Windows
+        if: runner.os == 'Windows'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
+        run: docker pull --platform linux/amd64 ${{ env.IMAGE }}
+
+      - name: Pull image on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: docker pull --platform linux/amd64 ${{ env.IMAGE }}
+
+      # The Gemini key comes from the repository secret GEMINI_API_KEY
+      # (Settings > Secrets and variables > Actions). It is never stored in the image.
+      - name: Deploy on Windows
+        if: runner.os == 'Windows'
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -File {0}
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          $existing = docker ps -aq --filter "name=^/${{ env.CONTAINER }}$"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          if ($existing) {
+            docker rm -f ${{ env.CONTAINER }}
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+          docker run -d --platform linux/amd64 --name ${{ env.CONTAINER }} -p 127.0.0.1:8000:8000 -e GEMINI_API_KEY ${{ env.IMAGE }}
+          exit $LASTEXITCODE
+
+      - name: Deploy on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          existing=$(docker ps -aq --filter "name=^/${{ env.CONTAINER }}$")
+          if [ -n "$existing" ]; then
+            docker rm -f ${{ env.CONTAINER }}
+          fi
+
+          docker run -d --platform linux/amd64 --name ${{ env.CONTAINER }} -p 127.0.0.1:8000:8000 -e GEMINI_API_KEY ${{ env.IMAGE }}
