@@ -1,53 +1,33 @@
-# EECE430 Assignment 5: AI Inventory Agent in Docker
+# EECE430 Assignment 6: AI Inventory Agent with GitHub Actions CI/CD
 
 **Jad Moharam, ID 202400899**
 
 A Django web app with an AI agent (Google Gemini) that checks and updates the stock and prices of a small hardware warehouse. The agent calls tools (`check_stock`, `list_items`, `add_item`, `remove_stock`, `delete_item`) that read and write the SQLite database.
 
-## Files added for Docker
+## CI/CD pipeline
 
-| File | Purpose |
-| --- | --- |
-| `Dockerfile` | Blueprint for the image (Python 3.13 slim, installs requirements, runs the Django server on port 8000) |
-| `requirements.txt` | Python dependencies: Django, google-genai, python-dotenv |
-| `.dockerignore` | Keeps `.env` (the API key), caches and PDFs out of the image |
+The pipeline is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). It runs on every push to `main`, and can also be started by hand from the Actions tab.
 
-The Gemini API key is **not** stored in the repository or the image. It is passed in when the container starts.
+| Job | Runs on | What it does |
+| --- | --- | --- |
+| `test` (CI) | GitHub's Ubuntu 24.04 machine | Installs the requirements, runs `manage.py check` and `manage.py test`, builds the Docker image and pushes it to `ghcr.io/jadmoh123/eece430-assignment6-ai-agent:latest` |
+| `deploy` (CD) | Self-hosted runner on my PC (label `ai-agent-deploy`) | Checks Docker, pulls the new image and replaces the `ai-agent-app` container on http://localhost:8000 |
 
-## 1. Build and run the image locally
+`deploy` only runs after `test` succeeds.
 
-```bash
-docker build -t inventory-agent .
-docker run -p 8000:8000 -e GEMINI_API_KEY=your-key -d inventory-agent
-```
+## The Gemini API key
 
-Open http://localhost:8000
+The key is **not** stored in the repository or the image. It is saved as the repository secret `GEMINI_API_KEY` and passed to the container by the `deploy` job when it starts. The `test` job uses a placeholder key, because the tests never call Gemini.
 
-## 2. Push the image to GitHub
+## Run the deployment locally
 
-The image is published to GitHub Container Registry and linked to this repository.
+1. Start Docker Desktop (Linux containers).
+2. Start the self-hosted runner: `C:\actions-runner\run.cmd`
+3. Push a change to `main`, wait for `test` and `deploy` to pass, then open http://localhost:8000
 
-```bash
-docker tag inventory-agent ghcr.io/jadmoh123/eece430-assignment5-ai-agent:latest
-docker login ghcr.io
-docker push ghcr.io/jadmoh123/eece430-assignment5-ai-agent:latest
-```
-
-## 3. Run the image from GitHub
+## Run the image by hand
 
 ```bash
-docker login ghcr.io
-docker pull ghcr.io/jadmoh123/eece430-assignment5-ai-agent:latest
-docker run -p 8000:8000 -e GEMINI_API_KEY=your-key -d ghcr.io/jadmoh123/eece430-assignment5-ai-agent:latest
-```
-
-`docker login ghcr.io` asks for your GitHub username and a personal access token with the `read:packages` scope, because the package is private.
-
-Open http://localhost:8000
-
-## Stop the container
-
-```bash
-docker ps
-docker stop <container-id>
+docker pull ghcr.io/jadmoh123/eece430-assignment6-ai-agent:latest
+docker run -d -p 8000:8000 -e GEMINI_API_KEY=your-key ghcr.io/jadmoh123/eece430-assignment6-ai-agent:latest
 ```
